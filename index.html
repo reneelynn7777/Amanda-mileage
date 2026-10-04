@@ -4,7 +4,7 @@
 :root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#111;background:#f5f5f7}*{box-sizing:border-box}body{margin:0}.wrap{max-width:760px;margin:auto;padding:18px}.card{background:#fff;border:1px solid #ddd;border-radius:16px;padding:16px;margin:12px 0}h1{margin:6px 0 12px}h2{font-size:20px;margin:0 0 10px}label{display:block;font-weight:650;margin:12px 0 5px}input,button,select,textarea{font:inherit;font-size:16px}input,select,textarea{width:100%;padding:13px;border:1px solid #bbb;border-radius:10px;background:#fff}button{min-height:46px;padding:12px 15px;border:0;border-radius:12px;background:#111;color:#fff;font-weight:750;margin:6px 5px 6px 0}.secondary{background:#e9e9ed;color:#111}.danger{background:#eee;color:#8a1111}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.total{font-size:28px;font-weight:800}.small{font-size:13px;color:#666;line-height:1.4}.status{padding:10px 12px;border-radius:10px;background:#f0f0f2;margin-top:8px}.trip{padding:12px 0;border-top:1px solid #eee}.trip:first-child{border-top:0}.actions{display:flex;flex-wrap:wrap;gap:2px}.pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#eee;font-size:12px}.money{font-size:18px;font-weight:750}.notice{border-left:4px solid #777;padding-left:12px}.hidden{display:none}@media(max-width:560px){.row{grid-template-columns:1fr}.wrap{padding:12px}}
 </style></head><body><main class="wrap">
 <h1>Amanda Mileage</h1>
-<div class="card"><div class="small">SAVED OFFICE</div><strong>4327 Hughes Branch Road, Huntington, WV</strong><div class="small">Type “Office” anywhere in From or To.</div></div>
+<div class="card"><div class="small">SAVED OFFICE</div><strong>4327 Hughes Branch Road, Huntington, WV 25701</strong><div class="small">Type “Office” anywhere in From or To.</div></div>
 <form id="f" class="card">
 <h2>Record Trip</h2>
 <div class="row"><div><label for="date">Date</label><input id="date" type="date" required></div><div><label for="client">Client initials</label><input id="client" maxlength="8" autocomplete="off" autocapitalize="characters" placeholder="TD"></div></div>
@@ -21,7 +21,7 @@
 <div class="card small"><strong>Voice on iPhone:</strong> tap a field and use the keyboard microphone. You can dictate addresses, purpose, and initials. After the app is hosted, open it in Safari → Share → Add to Home Screen.</div>
 </main>
 <script>
-const OFFICE='4327 Hughes Branch Road, Huntington, WV'; const $=x=>document.getElementById(x);
+const OFFICE='4327 Hughes Branch Road, Huntington, WV 25701'; const $=x=>document.getElementById(x);
 let trips=JSON.parse(localStorage.getItem('amandaMileageTrips')||'[]');
 let geoCache=JSON.parse(localStorage.getItem('amandaGeoCache')||'{}');
 let routeCache=JSON.parse(localStorage.getItem('amandaRouteCache')||'{}');
@@ -36,7 +36,22 @@ function persist(){localStorage.setItem('amandaMileageTrips',JSON.stringify(trip
 function selectedTrips(){return trips.filter(t=>t.date.slice(0,7)===$('month').value)}
 function render(){const shown=selectedTrips(),total=shown.reduce((s,t)=>s+Number(t.miles),0);$('total').textContent=total.toFixed(1)+' miles';const rate=Number($('rate').value);$('amount').textContent=rate>0?'Estimated reimbursement: $'+(total*rate).toFixed(2):'';$('list').innerHTML=shown.length?shown.map((t,i)=>{const realIndex=trips.indexOf(t);return `<div class="trip"><strong>${esc(t.date)}</strong> — ${esc(t.from)} → ${esc(t.to)}<br>${esc(t.purpose)} · ${esc(t.client||'')} · <strong>${Number(t.miles).toFixed(1)} mi</strong> ${t.auto?'<span class="pill">road route</span>':''}<br><button class="secondary" data-del="${realIndex}" type="button">Delete</button></div>`}).join(''):'No trips saved for this month.'}
 async function waitRateLimit(){const elapsed=Date.now()-lastGeoRequest;if(elapsed<1100)await new Promise(r=>setTimeout(r,1100-elapsed));lastGeoRequest=Date.now()}
-async function geocode(address){const a=normalizeAddress(address),k=key(a);if(geoCache[k])return geoCache[k];await waitRateLimit();const url='https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=us&q='+encodeURIComponent(a);const res=await fetch(url,{headers:{'Accept':'application/json'}});if(!res.ok)throw new Error('Address lookup failed ('+res.status+').');const data=await res.json();if(!data.length)throw new Error('Could not find: '+a);const out={lat:Number(data[0].lat),lon:Number(data[0].lon),display:data[0].display_name};geoCache[k]=out;persist();return out}
+async function geocode(address){
+ const a=normalizeAddress(address),k=key(a); if(geoCache[k])return geoCache[k];
+ const isOffice=/^office$/i.test(address.trim())||/4327\s+hughes\s+branch/i.test(a);
+ const queries=isOffice?[
+  '4327 Hughes Branch Rd, Huntington, WV 25701',
+  "Joyce's Greenhouse, 4327 Hughes Branch Rd, Huntington, WV 25701",
+  "Joyce's Greenhouse, Huntington, WV"
+ ]:[a, a.replace(/\bRoad\b/gi,'Rd').replace(/\bDrive\b/gi,'Dr').replace(/\bLane\b/gi,'Ln')];
+ let lastStatus='';
+ for(const q of [...new Set(queries)]){
+  await waitRateLimit();
+  const url='https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=us&addressdetails=1&q='+encodeURIComponent(q);
+  try{const res=await fetch(url,{headers:{'Accept':'application/json'}}); lastStatus=res.status; if(!res.ok)continue; const data=await res.json(); if(data.length){const out={lat:Number(data[0].lat),lon:Number(data[0].lon),display:data[0].display_name}; geoCache[k]=out; if(isOffice)geoCache[key('4327 Hughes Branch Road, Huntington, WV 25701')]=out; persist(); return out;}}catch(e){}
+ }
+ throw new Error('Could not find: '+a+(lastStatus?' (lookup '+lastStatus+')':''));
+}
 async function calculate(){const from=$('from').value.trim(),to=$('to').value.trim();if(!from||!to){$('routeStatus').textContent='Enter both From and To first.';return}const rk=routeKey(from,to);if(routeCache[rk]){$('miles').value=routeCache[rk].miles.toFixed(1);$('routeStatus').textContent='Using saved road mileage: '+routeCache[rk].miles.toFixed(1)+' miles. Review before saving.';return}try{$('calc').disabled=true;$('routeStatus').textContent='Looking up addresses…';const a=await geocode(from),b=await geocode(to);$('routeStatus').textContent='Calculating driving route…';const u=`https://router.project-osrm.org/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}?overview=false&steps=false`;const r=await fetch(u);if(!r.ok)throw new Error('Routing failed ('+r.status+').');const d=await r.json();if(d.code!=='Ok'||!d.routes||!d.routes.length)throw new Error('No driving route found.');const miles=d.routes[0].distance/1609.344;routeCache[rk]={miles,from:a.display,to:b.display,updated:new Date().toISOString()};persist();$('miles').value=miles.toFixed(1);$('routeStatus').textContent='Road route: '+miles.toFixed(1)+' miles. Please review before saving.'}catch(err){$('routeStatus').textContent='Could not calculate automatically: '+err.message+' You can still enter mileage manually.'}finally{$('calc').disabled=false}}
 $('calc').onclick=calculate;
 $('swap').onclick=()=>{const a=$('from').value;$('from').value=$('to').value;$('to').value=a;$('miles').value='';$('routeStatus').textContent='Locations swapped. Tap Calculate Road Mileage.'};
