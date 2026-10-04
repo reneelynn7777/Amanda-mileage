@@ -39,7 +39,7 @@ async function waitRateLimit(){const elapsed=Date.now()-lastGeoRequest;if(elapse
 async function geocode(address){
       // Permanent office location: bypass address lookup entirely.
       const normalizedOffice = String(address || "").toLowerCase();
-      if (normalizedOffice.includes("4329 hughes branch")) {
+      if (normalizedOffice.trim() === "office" || normalizedOffice.includes("4329 hughes branch")) {
         return { lat: 38.369777, lon: -82.348310, display_name: "4329 Hughes Branch Rd, Huntington, WV 25701" };
       }
  const a=normalizeAddress(address),k=key(a); if(geoCache[k])return geoCache[k];
