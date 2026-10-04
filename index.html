@@ -36,14 +36,27 @@ function persist(){localStorage.setItem('amandaMileageTrips',JSON.stringify(trip
 function selectedTrips(){return trips.filter(t=>t.date.slice(0,7)===$('month').value)}
 function render(){const shown=selectedTrips(),total=shown.reduce((s,t)=>s+Number(t.miles),0);$('total').textContent=total.toFixed(1)+' miles';const rate=Number($('rate').value);$('amount').textContent=rate>0?'Estimated reimbursement: $'+(total*rate).toFixed(2):'';$('list').innerHTML=shown.length?shown.map((t,i)=>{const realIndex=trips.indexOf(t);return `<div class="trip"><strong>${esc(t.date)}</strong> — ${esc(t.from)} → ${esc(t.to)}<br>${esc(t.purpose)} · ${esc(t.client||'')} · <strong>${Number(t.miles).toFixed(1)} mi</strong> ${t.auto?'<span class="pill">road route</span>':''}<br><button class="secondary" data-del="${realIndex}" type="button">Delete</button></div>`}).join(''):'No trips saved for this month.'}
 async function waitRateLimit(){const elapsed=Date.now()-lastGeoRequest;if(elapsed<1100)await new Promise(r=>setTimeout(r,1100-elapsed));lastGeoRequest=Date.now()}
-async function geocode(address){
-      // FIXED OFFICE: never send the office alias/address to the geocoding service.
-      const officeKey = String(address || "").trim().toLowerCase();
+async function geocode(address) {
+      // Verified Apple Maps location for 4139 Palestine Rd, Ashton, WV 25503.
+      // This bypasses the public geocoder, which does not resolve this rural address.
+      const verifiedKey = String(address || "").trim().toLowerCase();
       if (
-        officeKey === "office" ||
-        officeKey.includes("4329 hughes branch") ||
-        officeKey.includes("choice care")
+        verifiedKey.includes("4139 palestine rd") ||
+        verifiedKey.includes("4139 palestine road") ||
+        verifiedKey.includes("4139 palestine ridge")
       ) {
+        return {
+          lat: 38.57774,
+          lon: -82.11255,
+          display_name: "4139 Palestine Rd, Ashton, WV 25503"
+        };
+      }
+
+      const raw = String(address || "").trim();
+      const key = raw.toLowerCase();
+
+      // Permanent office coordinates: never geocode the office.
+      if (key === "office" || key.includes("4329 hughes branch") || key.includes("choice care")) {
         return {
           lat: 38.369777,
           lon: -82.348310,
@@ -51,21 +64,48 @@ async function geocode(address){
         };
       }
 
- const a=normalizeAddress(address),k=key(a); if(geoCache[k])return geoCache[k];
- const isOffice=/^office$/i.test(address.trim())||/4327\s+hughes\s+branch/i.test(a);
- const queries=isOffice?[
-  '4329 Hughes Branch Rd, Huntington, WV 25701',
-  "Joyce's Greenhouse, 4329 Hughes Branch Rd, Huntington, WV 25701",
-  "Joyce's Greenhouse, Huntington, WV"
- ]:[a, a.replace(/\bRoad\b/gi,'Rd').replace(/\bDrive\b/gi,'Dr').replace(/\bLane\b/gi,'Ln')];
- let lastStatus='';
- for(const q of [...new Set(queries)]){
-  await waitRateLimit();
-  const url='https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=us&addressdetails=1&q='+encodeURIComponent(q);
-  try{const res=await fetch(url,{headers:{'Accept':'application/json'}}); lastStatus=res.status; if(!res.ok)continue; const data=await res.json(); if(data.length){const out={lat:Number(data[0].lat),lon:Number(data[0].lon),display:data[0].display_name}; geoCache[k]=out; if(isOffice)geoCache[key('4329 Hughes Branch Rd, Huntington, WV 25701')]=out; persist(); return out;}}catch(e){}
- }
- throw new Error('Could not find: '+a+(lastStatus?' (lookup '+lastStatus+')':''));
-}
+      // Reuse successful address lookups on this device.
+      const cacheKey = "amanda_geo_" + key;
+      try {
+        const cached = JSON.parse(localStorage.getItem(cacheKey) || "null");
+        if (cached && cached.lat && cached.lon) return cached;
+      } catch (_) {}
+
+      // Rural-address fallback variants. Nominatim can recognize one form but not another.
+      const clean = raw.replace(/,/g, " ").replace(/\s+/g, " ").trim();
+      const variants = [
+        raw,
+        clean,
+        clean + (/\bWV\b/i.test(clean) ? "" : " WV"),
+        clean.replace(/\bRoad\b/ig, "Rd"),
+        clean.replace(/\bRd\b/ig, "Road")
+      ];
+
+      // If user omitted punctuation/state formatting, create a WV-biased structured-like query.
+      if (!/\bWest Virginia\b/i.test(clean)) variants.push(clean.replace(/\bWV\b/i, "West Virginia"));
+
+      const unique = [...new Set(variants.filter(Boolean))];
+
+      for (let i = 0; i < unique.length; i++) {
+        if (i) await new Promise(r => setTimeout(r, 1100)); // respect public geocoder pacing
+        const q = encodeURIComponent(unique[i]);
+        const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=us&addressdetails=1&q=${q}`;
+        const res = await fetch(url, { headers: { "Accept": "application/json" } });
+        if (!res.ok) continue;
+        const data = await res.json();
+        if (Array.isArray(data) && data.length) {
+          const hit = {
+            lat: Number(data[0].lat),
+            lon: Number(data[0].lon),
+            display_name: data[0].display_name || unique[i]
+          };
+          try { localStorage.setItem(cacheKey, JSON.stringify(hit)); } catch (_) {}
+          return hit;
+        }
+      }
+
+      throw new Error(`Could not find: ${raw} (tried ${unique.length} address formats)`);
+    }
 async function calculate(){const from=$('from').value.trim(),to=$('to').value.trim();if(!from||!to){$('routeStatus').textContent='Enter both From and To first.';return}const rk=routeKey(from,to);if(routeCache[rk]){$('miles').value=routeCache[rk].miles.toFixed(1);$('routeStatus').textContent='Using saved road mileage: '+routeCache[rk].miles.toFixed(1)+' miles. Review before saving.';return}try{$('calc').disabled=true;$('routeStatus').textContent='Looking up addresses…';const a=await geocode(from),b=await geocode(to);$('routeStatus').textContent='Calculating driving route…';const u=`https://router.project-osrm.org/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}?overview=false&steps=false`;const r=await fetch(u);if(!r.ok)throw new Error('Routing failed ('+r.status+').');const d=await r.json();if(d.code!=='Ok'||!d.routes||!d.routes.length)throw new Error('No driving route found.');const miles=d.routes[0].distance/1609.344;routeCache[rk]={miles,from:a.display,to:b.display,updated:new Date().toISOString()};persist();$('miles').value=miles.toFixed(1);$('routeStatus').textContent='Road route: '+miles.toFixed(1)+' miles. Please review before saving.'}catch(err){$('routeStatus').textContent='Could not calculate automatically: '+err.message+' You can still enter mileage manually.'}finally{$('calc').disabled=false}}
 $('calc').onclick=calculate;
 $('swap').onclick=()=>{const a=$('from').value;$('from').value=$('to').value;$('to').value=a;$('miles').value='';$('routeStatus').textContent='Locations swapped. Tap Calculate Road Mileage.'};
@@ -73,10 +113,10 @@ $('return').onclick=()=>{const current=$('to').value.trim()||$('from').value.tri
 $('f').addEventListener('submit',e=>{e.preventDefault();const m=Number($('miles').value);if(!Number.isFinite(m)||m<0)return;const rk=routeKey($('from').value,$('to').value);let t={date:$('date').value,from:$('from').value.trim(),to:$('to').value.trim(),purpose:$('purpose').value.trim(),client:$('client').value.trim().toUpperCase(),miles:m,auto:!!routeCache[rk]};trips.push(t);persist();$('from').value=t.to;$('to').value='';$('purpose').value='';$('client').value='';$('miles').value='';$('routeStatus').textContent='Trip saved. Next trip starts from '+t.to+'.';render()});
 $('list').onclick=e=>{const b=e.target.closest('[data-del]');if(b&&confirm('Delete this trip?')){trips.splice(Number(b.dataset.del),1);persist();render()}};
 $('month').onchange=render;$('rate').oninput=()=>{localStorage.setItem('amandaMileageRate',$('rate').value);render()};
-$('report').onclick=()=>{const shown=selectedTrips();const total=shown.reduce((s,t)=>s+Number(t.miles),0);const rate=Number($('rate').value)||0;const month=$('month').value;const title=new Date(month+'-01T12:00:00').toLocaleDateString(undefined,{month:'long',year:'numeric'});const rows=shown.map(t=>`<tr><td>${esc(t.date)}</td><td>${esc(t.from)}</td><td>${esc(t.to)}</td><td>${esc(t.purpose)}</td><td>${esc(t.client||'')}</td><td class="num">${Number(t.miles).toFixed(1)}</td></tr>`).join('');const w=window.open('','_blank');if(!w){alert('Please allow pop-ups to create the printable report.');return;}w.document.write(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Amanda Mileage ${esc(title)}</title><style>body{font-family:Arial,sans-serif;margin:28px;color:#111}h1{font-size:22px;margin:0 0 4px}.sub{margin:0 0 18px;color:#444}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}.box{border:1px solid #777;padding:8px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #777;padding:7px;text-align:left;vertical-align:top}th{background:#eee}.num{text-align:right}.totals{margin:16px 0 0 auto;width:280px}.totals div{display:flex;justify-content:space-between;border-bottom:1px solid #aaa;padding:6px}.sign{margin-top:38px;display:grid;grid-template-columns:1fr 160px;gap:28px}.line{border-top:1px solid #111;padding-top:5px;font-size:12px}@media print{button{display:none}body{margin:.35in}}</style></head><body><h1>Monthly Mileage Expense Report</h1><p class="sub">${esc(title)}</p><div class="meta"><div class="box"><strong>Employee:</strong> Amanda</div><div class="box"><strong>Office:</strong> 4329 Hughes Branch Rd, Huntington, WV 25701</div></div><table><thead><tr><th>Date</th><th>From</th><th>To</th><th>Purpose</th><th>Client Initials</th><th>Miles</th></tr></thead><tbody>${rows||'<tr><td colspan="6">No trips recorded for this month.</td></tr>'}</tbody></table><div class="totals"><div><strong>Total Miles</strong><strong>${total.toFixed(1)}</strong></div>${rate>0?`<div><span>Rate / Mile</span><span>$${rate.toFixed(3)}</span></div><div><strong>Reimbursement</strong><strong>$${(total*rate).toFixed(2)}</strong></div>`:''}</div><div class="sign"><div class="line">Employee Signature</div><div class="line">Date</div></div><p style="font-size:10px;color:#666;margin-top:24px">Generated by Amanda Mileage. Review all entries and route mileage before submission.</p><button onclick="window.print()">Print / Save as PDF</button><div style="text-align:center;font-size:11px;color:#888;margin:12px">Build 5.1 — Office routing fix</div>
+$('report').onclick=()=>{const shown=selectedTrips();const total=shown.reduce((s,t)=>s+Number(t.miles),0);const rate=Number($('rate').value)||0;const month=$('month').value;const title=new Date(month+'-01T12:00:00').toLocaleDateString(undefined,{month:'long',year:'numeric'});const rows=shown.map(t=>`<tr><td>${esc(t.date)}</td><td>${esc(t.from)}</td><td>${esc(t.to)}</td><td>${esc(t.purpose)}</td><td>${esc(t.client||'')}</td><td class="num">${Number(t.miles).toFixed(1)}</td></tr>`).join('');const w=window.open('','_blank');if(!w){alert('Please allow pop-ups to create the printable report.');return;}w.document.write(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Amanda Mileage ${esc(title)}</title><style>body{font-family:Arial,sans-serif;margin:28px;color:#111}h1{font-size:22px;margin:0 0 4px}.sub{margin:0 0 18px;color:#444}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}.box{border:1px solid #777;padding:8px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #777;padding:7px;text-align:left;vertical-align:top}th{background:#eee}.num{text-align:right}.totals{margin:16px 0 0 auto;width:280px}.totals div{display:flex;justify-content:space-between;border-bottom:1px solid #aaa;padding:6px}.sign{margin-top:38px;display:grid;grid-template-columns:1fr 160px;gap:28px}.line{border-top:1px solid #111;padding-top:5px;font-size:12px}@media print{button{display:none}body{margin:.35in}}</style></head><body><h1>Monthly Mileage Expense Report</h1><p class="sub">${esc(title)}</p><div class="meta"><div class="box"><strong>Employee:</strong> Amanda</div><div class="box"><strong>Office:</strong> 4329 Hughes Branch Rd, Huntington, WV 25701</div></div><table><thead><tr><th>Date</th><th>From</th><th>To</th><th>Purpose</th><th>Client Initials</th><th>Miles</th></tr></thead><tbody>${rows||'<tr><td colspan="6">No trips recorded for this month.</td></tr>'}</tbody></table><div class="totals"><div><strong>Total Miles</strong><strong>${total.toFixed(1)}</strong></div>${rate>0?`<div><span>Rate / Mile</span><span>$${rate.toFixed(3)}</span></div><div><strong>Reimbursement</strong><strong>$${(total*rate).toFixed(2)}</strong></div>`:''}</div><div class="sign"><div class="line">Employee Signature</div><div class="line">Date</div></div><p style="font-size:10px;color:#666;margin-top:24px">Generated by Amanda Mileage. Review all entries and route mileage before submission.</p><button onclick="window.print()">Print / Save as PDF</button><div style="text-align:center;font-size:11px;color:#888;margin:12px">Build 5.3 — Verified rural location</div>
 </body></html>`);w.document.close();};
 $('clear').onclick=()=>{const m=$('month').value;if(confirm('Clear all trips for '+m+'?')){trips=trips.filter(t=>t.date.slice(0,7)!==m);persist();render()}};
 $('csv').onclick=()=>{const shown=selectedTrips();const q=v=>'"'+String(v??'').replaceAll('"','""')+'"';let lines=[['Date','From','To','Purpose','Client Initials','Miles'].map(q).join(','),...shown.map(t=>[t.date,t.from,t.to,t.purpose,t.client,Number(t.miles).toFixed(1)].map(q).join(','))];const total=shown.reduce((s,t)=>s+Number(t.miles),0);lines.push(['','','','','Total Miles',total.toFixed(1)].map(q).join(','));const rate=Number($('rate').value);if(rate>0)lines.push(['','','','','Reimbursement',(total*rate).toFixed(2)].map(q).join(','));let blob=new Blob([lines.join('\n')],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='Amanda_Mileage_'+$('month').value+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};
 if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});render();
-</script><div style="text-align:center;font-size:11px;color:#888;margin:12px">Build 5.1 — Office routing fix</div>
+</script><div style="text-align:center;font-size:11px;color:#888;margin:12px">Build 5.3 — Verified rural location</div>
 </body></html>
