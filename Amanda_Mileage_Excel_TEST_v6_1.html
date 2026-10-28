@@ -1,0 +1,215 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#ffffff"><link rel="manifest" href="manifest.json"><title>Amanda Mileage</title>
+<style>
+:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#111;background:#f5f5f7}*{box-sizing:border-box}body{margin:0}.wrap{max-width:760px;margin:auto;padding:18px}.card{background:#fff;border:1px solid #ddd;border-radius:16px;padding:16px;margin:12px 0}h1{margin:6px 0 12px}h2{font-size:20px;margin:0 0 10px}label{display:block;font-weight:650;margin:12px 0 5px}input,button,select,textarea{font:inherit;font-size:16px}input,select,textarea{width:100%;padding:13px;border:1px solid #bbb;border-radius:10px;background:#fff}button{min-height:46px;padding:12px 15px;border:0;border-radius:12px;background:#111;color:#fff;font-weight:750;margin:6px 5px 6px 0}.secondary{background:#e9e9ed;color:#111}.danger{background:#eee;color:#8a1111}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.total{font-size:28px;font-weight:800}.small{font-size:13px;color:#666;line-height:1.4}.status{padding:10px 12px;border-radius:10px;background:#f0f0f2;margin-top:8px}.trip{padding:12px 0;border-top:1px solid #eee}.trip:first-child{border-top:0}.actions{display:flex;flex-wrap:wrap;gap:2px}.pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#eee;font-size:12px}.money{font-size:18px;font-weight:750}.notice{border-left:4px solid #777;padding-left:12px}.hidden{display:none}@media(max-width:560px){.row{grid-template-columns:1fr}.wrap{padding:12px}}
+</style></head><body><main class="wrap">
+<h1>Amanda Mileage</h1>
+<div class="card"><div class="small">SAVED OFFICE</div><strong>4329 Hughes Branch Rd, Huntington, WV 25701</strong><div class="small">Type “Office” anywhere in From or To.</div></div>
+<form id="f" class="card">
+<h2>Record Trip</h2>
+<div class="row"><div><label for="date">Date</label><input id="date" type="date" required></div><div><label for="client">Client initials</label><input id="client" maxlength="8" autocomplete="off" autocapitalize="characters" placeholder="TD"></div></div>
+<label for="from">From</label><input id="from" value="Office" required autocomplete="street-address">
+<label for="to">To</label><input id="to" required placeholder="Destination address" autocomplete="street-address">
+<div class="row"><div><label for="purpose">Purpose</label><input id="purpose" required placeholder="MNER"></div><div><label for="miles">Driving miles</label><input id="miles" type="number" step=".1" min="0" required placeholder="Calculate below"></div></div>
+<div class="actions"><button type="button" id="calc">Calculate Road Mileage</button><button type="button" class="secondary" id="return">Return to Office</button><button type="button" class="secondary" id="swap">Swap</button></div>
+<div id="routeStatus" class="status small">Enter From and To, then tap <strong>Calculate Road Mileage</strong>. Previously calculated routes are reused automatically.</div>
+<button type="submit">Save Trip</button>
+</form>
+<div class="card"><div class="row"><div><div class="small">MONTH</div><input id="month" type="month"></div><div><div class="small">REIMBURSEMENT RATE / MILE</div><input id="rate" type="number" min="0" step=".001" placeholder="Optional"></div></div><div style="margin-top:14px" class="small">MONTH TOTAL</div><div id="total" class="total">0.0 miles</div><div id="amount" class="money"></div><div class="actions"><button id="report" type="button">Printable Monthly Report</button><button id="csv" class="secondary" type="button">Export CSV</button><button id="voucher" class="secondary" type="button">Download Official Excel Voucher</button><button id="clear" class="danger" type="button">Clear This Month</button></div></div>
+<div class="card"><h2>Trips</h2><div id="list" class="small">No trips saved.</div></div>
+<div class="card small notice"><strong>Privacy:</strong> client initials and purpose remain in this browser and are not included in route requests. When you tap Calculate, only the From/To addresses are sent to the address/routing services. Do not use this free lookup if your employer considers the destination address itself confidential. Address results are cached on this device to reduce repeat lookups.<br><br>Geocoding © OpenStreetMap contributors. Routing uses the public OSRM demonstration service. Free public services can be unavailable or change their policies; always review the displayed route mileage before saving.</div>
+<div class="card small"><strong>Voice on iPhone:</strong> tap a field and use the keyboard microphone. You can dictate addresses, purpose, and initials. After the app is hosted, open it in Safari → Share → Add to Home Screen.</div>
+</main>
+<script>
+const OFFICE='4329 Hughes Branch Rd, Huntington, WV 25701'; const $=x=>document.getElementById(x);
+let trips=JSON.parse(localStorage.getItem('amandaMileageTrips')||'[]');
+let geoCache=JSON.parse(localStorage.getItem('amandaGeoCache')||'{}');
+let routeCache=JSON.parse(localStorage.getItem('amandaRouteCache')||'{}');
+let lastGeoRequest=0;
+const now=new Date(); const today=[now.getFullYear(),String(now.getMonth()+1).padStart(2,'0'),String(now.getDate()).padStart(2,'0')].join('-');
+$('date').value=today; $('month').value=today.slice(0,7); $('rate').value=localStorage.getItem('amandaMileageRate')||'';
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function normalizeAddress(s){s=String(s||'').trim();return /^office$/i.test(s)?OFFICE:s}
+function key(s){return normalizeAddress(s).toLowerCase().replace(/\s+/g,' ')}
+function routeKey(a,b){return key(a)+'|||'+key(b)}
+function persist(){localStorage.setItem('amandaMileageTrips',JSON.stringify(trips));localStorage.setItem('amandaGeoCache',JSON.stringify(geoCache));localStorage.setItem('amandaRouteCache',JSON.stringify(routeCache));}
+function selectedTrips(){return trips.filter(t=>t.date.slice(0,7)===$('month').value)}
+function render(){const shown=selectedTrips(),total=shown.reduce((s,t)=>s+Number(t.miles),0);$('total').textContent=total.toFixed(1)+' miles';const rate=Number($('rate').value);$('amount').textContent=rate>0?'Estimated reimbursement: $'+(total*rate).toFixed(2):'';$('list').innerHTML=shown.length?shown.map((t,i)=>{const realIndex=trips.indexOf(t);return `<div class="trip"><strong>${esc(t.date)}</strong> — ${esc(t.from)} → ${esc(t.to)}<br>${esc(t.purpose)} · ${esc(t.client||'')} · <strong>${Number(t.miles).toFixed(1)} mi</strong> ${t.auto?'<span class="pill">road route</span>':''}<br><button class="secondary" data-del="${realIndex}" type="button">Delete</button></div>`}).join(''):'No trips saved for this month.'}
+async function waitRateLimit(){const elapsed=Date.now()-lastGeoRequest;if(elapsed<1100)await new Promise(r=>setTimeout(r,1100-elapsed));lastGeoRequest=Date.now()}
+async function geocode(address) {
+      // Verified Apple Maps location for 4139 Palestine Rd, Ashton, WV 25503.
+      // This bypasses the public geocoder, which does not resolve this rural address.
+      const verifiedKey = String(address || "").trim().toLowerCase();
+      if (
+        verifiedKey.includes("4139 palestine rd") ||
+        verifiedKey.includes("4139 palestine road") ||
+        verifiedKey.includes("4139 palestine ridge")
+      ) {
+        return {
+          lat: 38.57774,
+          lon: -82.11255,
+          display_name: "4139 Palestine Rd, Ashton, WV 25503"
+        };
+      }
+
+      const raw = String(address || "").trim();
+      const key = raw.toLowerCase();
+
+      // Permanent office coordinates: never geocode the office.
+      if (key === "office" || key.includes("4329 hughes branch") || key.includes("choice care")) {
+        return {
+          lat: 38.369777,
+          lon: -82.348310,
+          display_name: "4329 Hughes Branch Rd, Huntington, WV 25701"
+        };
+      }
+
+      // Reuse successful address lookups on this device.
+      const cacheKey = "amanda_geo_" + key;
+      try {
+        const cached = JSON.parse(localStorage.getItem(cacheKey) || "null");
+        if (cached && cached.lat && cached.lon) return cached;
+      } catch (_) {}
+
+      // Rural-address fallback variants. Nominatim can recognize one form but not another.
+      const clean = raw.replace(/,/g, " ").replace(/\s+/g, " ").trim();
+      const variants = [
+        raw,
+        clean,
+        clean + (/\bWV\b/i.test(clean) ? "" : " WV"),
+        clean.replace(/\bRoad\b/ig, "Rd"),
+        clean.replace(/\bRd\b/ig, "Road")
+      ];
+
+      // If user omitted punctuation/state formatting, create a WV-biased structured-like query.
+      if (!/\bWest Virginia\b/i.test(clean)) variants.push(clean.replace(/\bWV\b/i, "West Virginia"));
+
+      const unique = [...new Set(variants.filter(Boolean))];
+
+      for (let i = 0; i < unique.length; i++) {
+        if (i) await new Promise(r => setTimeout(r, 1100)); // respect public geocoder pacing
+        const q = encodeURIComponent(unique[i]);
+        const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=us&addressdetails=1&q=${q}`;
+        const res = await fetch(url, { headers: { "Accept": "application/json" } });
+        if (!res.ok) continue;
+        const data = await res.json();
+        if (Array.isArray(data) && data.length) {
+          const hit = {
+            lat: Number(data[0].lat),
+            lon: Number(data[0].lon),
+            display_name: data[0].display_name || unique[i]
+          };
+          try { localStorage.setItem(cacheKey, JSON.stringify(hit)); } catch (_) {}
+          return hit;
+        }
+      }
+
+      throw new Error(`Could not find: ${raw} (tried ${unique.length} address formats)`);
+    }
+async function calculate(){const from=$('from').value.trim(),to=$('to').value.trim();if(!from||!to){$('routeStatus').textContent='Enter both From and To first.';return}const rk=routeKey(from,to);if(routeCache[rk]){$('miles').value=routeCache[rk].miles.toFixed(1);$('routeStatus').textContent='Using saved road mileage: '+routeCache[rk].miles.toFixed(1)+' miles. Review before saving.';return}try{$('calc').disabled=true;$('routeStatus').textContent='Looking up addresses…';const a=await geocode(from),b=await geocode(to);$('routeStatus').textContent='Calculating driving route…';const u=`https://router.project-osrm.org/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}?overview=false&steps=false`;const r=await fetch(u);if(!r.ok)throw new Error('Routing failed ('+r.status+').');const d=await r.json();if(d.code!=='Ok'||!d.routes||!d.routes.length)throw new Error('No driving route found.');const miles=d.routes[0].distance/1609.344;routeCache[rk]={miles,from:a.display,to:b.display,updated:new Date().toISOString()};persist();$('miles').value=miles.toFixed(1);$('routeStatus').textContent='Road route: '+miles.toFixed(1)+' miles. Please review before saving.'}catch(err){$('routeStatus').textContent='Could not calculate automatically: '+err.message+' You can still enter mileage manually.'}finally{$('calc').disabled=false}}
+$('calc').onclick=calculate;
+$('swap').onclick=()=>{const a=$('from').value;$('from').value=$('to').value;$('to').value=a;$('miles').value='';$('routeStatus').textContent='Locations swapped. Tap Calculate Road Mileage.'};
+$('return').onclick=()=>{const current=$('to').value.trim()||$('from').value.trim();$('from').value=current||'Office';$('to').value='Office';$('purpose').value=$('purpose').value||'Return';$('miles').value='';$('routeStatus').textContent='Return trip prepared. Tap Calculate Road Mileage.'};
+$('f').addEventListener('submit',e=>{e.preventDefault();const m=Number($('miles').value);if(!Number.isFinite(m)||m<0)return;const rk=routeKey($('from').value,$('to').value);let t={date:$('date').value,from:$('from').value.trim(),to:$('to').value.trim(),purpose:$('purpose').value.trim(),client:$('client').value.trim().toUpperCase(),miles:m,auto:!!routeCache[rk]};trips.push(t);persist();$('from').value=t.to;$('to').value='';$('purpose').value='';$('client').value='';$('miles').value='';$('routeStatus').textContent='Trip saved. Next trip starts from '+t.to+'.';render()});
+$('list').onclick=e=>{const b=e.target.closest('[data-del]');if(b&&confirm('Delete this trip?')){trips.splice(Number(b.dataset.del),1);persist();render()}};
+$('month').onchange=render;$('rate').oninput=()=>{localStorage.setItem('amandaMileageRate',$('rate').value);render()};
+$('report').onclick=()=>{const shown=selectedTrips();const total=shown.reduce((s,t)=>s+Number(t.miles),0);const rate=Number($('rate').value)||0;const month=$('month').value;const title=new Date(month+'-01T12:00:00').toLocaleDateString(undefined,{month:'long',year:'numeric'});const rows=shown.map(t=>`<tr><td>${esc(t.date)}</td><td>${esc(t.from)}</td><td>${esc(t.to)}</td><td>${esc(t.purpose)}</td><td>${esc(t.client||'')}</td><td class="num">${Number(t.miles).toFixed(1)}</td></tr>`).join('');const w=window.open('','_blank');if(!w){alert('Please allow pop-ups to create the printable report.');return;}w.document.write(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Amanda Mileage ${esc(title)}</title><style>body{font-family:Arial,sans-serif;margin:28px;color:#111}h1{font-size:22px;margin:0 0 4px}.sub{margin:0 0 18px;color:#444}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}.box{border:1px solid #777;padding:8px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #777;padding:7px;text-align:left;vertical-align:top}th{background:#eee}.num{text-align:right}.totals{margin:16px 0 0 auto;width:280px}.totals div{display:flex;justify-content:space-between;border-bottom:1px solid #aaa;padding:6px}.sign{margin-top:38px;display:grid;grid-template-columns:1fr 160px;gap:28px}.line{border-top:1px solid #111;padding-top:5px;font-size:12px}@media print{button{display:none}body{margin:.35in}}</style></head><body><h1>Monthly Mileage Expense Report</h1><p class="sub">${esc(title)}</p><div class="meta"><div class="box"><strong>Employee:</strong> Amanda</div><div class="box"><strong>Office:</strong> 4329 Hughes Branch Rd, Huntington, WV 25701</div></div><table><thead><tr><th>Date</th><th>From</th><th>To</th><th>Purpose</th><th>Client Initials</th><th>Miles</th></tr></thead><tbody>${rows||'<tr><td colspan="6">No trips recorded for this month.</td></tr>'}</tbody></table><div class="totals"><div><strong>Total Miles</strong><strong>${total.toFixed(1)}</strong></div>${rate>0?`<div><span>Rate / Mile</span><span>$${rate.toFixed(3)}</span></div><div><strong>Reimbursement</strong><strong>$${(total*rate).toFixed(2)}</strong></div>`:''}</div><div class="sign"><div class="line">Employee Signature</div><div class="line">Date</div></div><p style="font-size:10px;color:#666;margin-top:24px">Generated by Amanda Mileage. Review all entries and route mileage before submission.</p><button onclick="window.print()">Print / Save as PDF</button><div style="text-align:center;font-size:11px;color:#888;margin:12px">Build 6.1 — Excel export repair</div>
+</body></html>`);w.document.close();};
+$('clear').onclick=()=>{const m=$('month').value;if(confirm('Clear all trips for '+m+'?')){trips=trips.filter(t=>t.date.slice(0,7)!==m);persist();render()}};
+$('csv').onclick=()=>{const shown=selectedTrips();const q=v=>'"'+String(v??'').replaceAll('"','""')+'"';let lines=[['Date','From','To','Purpose','Client Initials','Miles'].map(q).join(','),...shown.map(t=>[t.date,t.from,t.to,t.purpose,t.client,Number(t.miles).toFixed(1)].map(q).join(','))];const total=shown.reduce((s,t)=>s+Number(t.miles),0);lines.push(['','','','','Total Miles',total.toFixed(1)].map(q).join(','));const rate=Number($('rate').value);if(rate>0)lines.push(['','','','','Reimbursement',(total*rate).toFixed(2)].map(q).join(','));let blob=new Blob([lines.join('\n')],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='Amanda_Mileage_'+$('month').value+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};
+
+// Official employer voucher: uses the approved, embedded Excel workbook as the template.
+// This export only READS existing trips; it never alters localStorage or trip records.
+const voucherTemplateBase64='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';
+function voucherTemplateBuffer(){const binary=atob(voucherTemplateBase64);const bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);return bytes.buffer}
+
+// Edit the actual XLSX ZIP/XML rather than importing its fonts into XlsxPopulate.
+// This preserves the employer's existing fonts, borders, merges and page layout.
+function loadVoucherLibrary(){return new Promise((resolve,reject)=>{if(window.JSZip)return resolve(window.JSZip);const sc=document.createElement('script');sc.src='https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';sc.onload=()=>window.JSZip?resolve(window.JSZip):reject(new Error('ZIP library unavailable'));sc.onerror=()=>reject(new Error('Could not load Excel exporter. Check internet connection.'));document.head.appendChild(sc)})}
+const XMLNS='http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+function parseXML(s){const d=new DOMParser().parseFromString(s,'application/xml');if(d.getElementsByTagName('parsererror').length)throw new Error('Excel template XML could not be read');return d}
+function xmlString(d){return new XMLSerializer().serializeToString(d)}
+function findCell(doc,addr){
+ const rows=doc.getElementsByTagNameNS(XMLNS,'row');
+ const rowNum=Number(addr.match(/\d+/)[0]);
+ let row=Array.from(rows).find(x=>Number(x.getAttribute('r'))===rowNum);
+ if(!row)throw new Error('Missing template row '+rowNum);
+ let c=Array.from(row.getElementsByTagNameNS(XMLNS,'c')).find(x=>x.getAttribute('r')===addr);
+ if(!c){c=doc.createElementNS(XMLNS,'c');c.setAttribute('r',addr);row.appendChild(c)}
+ return c;
+}
+function putCell(doc,addr,value,formula){
+ const c=findCell(doc,addr);
+ Array.from(c.childNodes).forEach(n=>{if(n.nodeType===1&&['v','f','is'].includes(n.localName))c.removeChild(n)});
+ c.removeAttribute('t');
+ if(formula){const f=doc.createElementNS(XMLNS,'f');f.textContent=formula;c.appendChild(f);return}
+ if(value===null||value===undefined||value==='')return;
+ if(typeof value==='number'){const v=doc.createElementNS(XMLNS,'v');v.textContent=String(value);c.appendChild(v)}
+ else{c.setAttribute('t','inlineStr');const is=doc.createElementNS(XMLNS,'is');const t=doc.createElementNS(XMLNS,'t');t.textContent=String(value);is.appendChild(t);c.appendChild(is)}
+}
+function fillVoucherSheet(doc,batch,rate,page,count){
+ putCell(doc,'M1',rate);
+ for(let i=0;i<9;i++){
+  const r=8+i*2,t=batch[i];
+  putCell(doc,'A'+r,t?t.date:'');
+  putCell(doc,'B'+r,'Mileage');
+  putCell(doc,'D'+r,t?t.to:'');
+  putCell(doc,'D'+(r+1),t?t.from:'');
+  putCell(doc,'F'+r,t?t.purpose:'');
+  putCell(doc,'G'+r,t?t.client:'');
+  putCell(doc,'H'+r,t?Number(t.miles):null);
+  putCell(doc,'I'+r,null,'IF(H'+r+'="","",ROUND(H'+r+'*$M$1,2))');
+ }
+ putCell(doc,'I27',null,'SUM(I8,I10,I12,I14,I16,I18,I20,I22,I24)');
+ putCell(doc,'I29',null,page===0?'SUM('+Array.from({length:count},(_,i)=>"'Page "+(i+1)+"'!I27").join(',')+')':'I27');
+ // Remove any stray example entries beyond the printed voucher.
+ for(const row of Array.from(doc.getElementsByTagNameNS(XMLNS,'row'))){
+  if(Number(row.getAttribute('r'))>=32&&Number(row.getAttribute('r'))<=33){
+   for(const c of Array.from(row.getElementsByTagNameNS(XMLNS,'c'))){
+    for(const n of Array.from(c.childNodes)){if(n.nodeType===1&&['v','f','is'].includes(n.localName))c.removeChild(n)}
+   }
+  }
+ }
+}
+$('voucher').onclick=async()=>{
+ const button=$('voucher'),original=button.textContent;
+ try{
+  const shown=selectedTrips().slice().sort((a,b)=>a.date.localeCompare(b.date));
+  if(!shown.length){alert('No trips saved for this month.');return}
+  const rate=Number($('rate').value);
+  if(!Number.isFinite(rate)||rate<=0){alert('Enter the approved reimbursement rate first.');return}
+  button.disabled=true;button.textContent='Preparing Excel…';
+  const JSZip=await loadVoucherLibrary();
+  const zip=await JSZip.loadAsync(voucherTemplateBuffer());
+  const source=await zip.file('xl/worksheets/sheet1.xml').async('string');
+  const count=Math.ceil(shown.length/9);
+  for(let p=0;p<count;p++){
+   const doc=parseXML(source);
+   fillVoucherSheet(doc,shown.slice(p*9,(p+1)*9),rate,p,count);
+   zip.file('xl/worksheets/sheet'+(p===0?1:p+2)+'.xml',xmlString(doc));
+  }
+  const wb=parseXML(await zip.file('xl/workbook.xml').async('string'));
+  const sheets=wb.getElementsByTagNameNS(XMLNS,'sheets')[0];
+  const first=sheets.getElementsByTagNameNS(XMLNS,'sheet')[0];first.setAttribute('name','Page 1');
+  const rel=parseXML(await zip.file('xl/_rels/workbook.xml.rels').async('string'));
+  const types=parseXML(await zip.file('[Content_Types].xml').async('string'));
+  const relNS='http://schemas.openxmlformats.org/package/2006/relationships';
+  const typeNS='http://schemas.openxmlformats.org/package/2006/content-types';
+  for(let p=1;p<count;p++){
+   const num=p+2, rid='rId'+(num+4);
+   const sn=first.cloneNode(true);sn.setAttribute('name','Page '+(p+1));sn.setAttribute('sheetId',String(num));sn.setAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','r:id',rid);sheets.appendChild(sn);
+   const rr=rel.createElementNS(relNS,'Relationship');rr.setAttribute('Type','http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet');rr.setAttribute('Target','/xl/worksheets/sheet'+num+'.xml');rr.setAttribute('Id',rid);rel.documentElement.appendChild(rr);
+   const tt=types.createElementNS(typeNS,'Override');tt.setAttribute('PartName','/xl/worksheets/sheet'+num+'.xml');tt.setAttribute('ContentType','application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml');types.documentElement.appendChild(tt);
+  }
+  zip.file('xl/workbook.xml',xmlString(wb));zip.file('xl/_rels/workbook.xml.rels',xmlString(rel));zip.file('[Content_Types].xml',xmlString(types));
+  const blob=await zip.generateAsync({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const url=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=url;a.download='Amanda_Official_Expense_Voucher_'+$('month').value+'.xlsx';
+  document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
+ }catch(err){alert('Excel export failed: '+err.message+'. Your saved trips have not been changed.')}
+ finally{button.disabled=false;button.textContent=original}
+};
+
+if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});render();
+</script><div style="text-align:center;font-size:11px;color:#888;margin:12px">Build 6.1 — Excel export repair</div>
+</body></html>
