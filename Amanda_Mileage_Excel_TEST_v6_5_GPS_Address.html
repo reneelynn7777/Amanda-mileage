@@ -1,0 +1,253 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#ffffff"><link rel="manifest" href="manifest.json"><title>Amanda Mileage</title>
+<style>
+:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#111;background:#f5f5f7}*{box-sizing:border-box}body{margin:0}.wrap{max-width:760px;margin:auto;padding:18px}.card{background:#fff;border:1px solid #ddd;border-radius:16px;padding:16px;margin:12px 0}h1{margin:6px 0 12px}h2{font-size:20px;margin:0 0 10px}label{display:block;font-weight:650;margin:12px 0 5px}input,button,select,textarea{font:inherit;font-size:16px}input,select,textarea{width:100%;padding:13px;border:1px solid #bbb;border-radius:10px;background:#fff}button{min-height:46px;padding:12px 15px;border:0;border-radius:12px;background:#111;color:#fff;font-weight:750;margin:6px 5px 6px 0}.secondary{background:#e9e9ed;color:#111}.danger{background:#eee;color:#8a1111}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.total{font-size:28px;font-weight:800}.small{font-size:13px;color:#666;line-height:1.4}.status{padding:10px 12px;border-radius:10px;background:#f0f0f2;margin-top:8px}.trip{padding:12px 0;border-top:1px solid #eee}.trip:first-child{border-top:0}.actions{display:flex;flex-wrap:wrap;gap:2px}.pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#eee;font-size:12px}.money{font-size:18px;font-weight:750}.notice{border-left:4px solid #777;padding-left:12px}.hidden{display:none}@media(max-width:560px){.row{grid-template-columns:1fr}.wrap{padding:12px}}
+</style></head><body><main class="wrap">
+<h1>Amanda Mileage</h1>
+<div class="card"><div class="small">SAVED OFFICE</div><strong>4329 Hughes Branch Rd, Huntington, WV 25701</strong><div class="small">Type “Office” anywhere in From or To.</div></div>
+<form id="f" class="card">
+<h2>Record Trip</h2>
+<div class="row"><div><label for="date">Date</label><input id="date" type="date" required></div><div><label for="client">Client initials</label><input id="client" maxlength="8" autocomplete="off" autocapitalize="characters" placeholder="TD"></div></div>
+<label for="from">From</label><input id="from" value="Office" required autocomplete="street-address">
+<label for="to">To</label><input id="to" required placeholder="Destination address" autocomplete="street-address">
+<div id="coordHelp" class="status small hidden">GPS coordinates detected. The app will use them for routing. Add a readable address below for the voucher, or tap Find Address.</div><div class="actions"><button type="button" class="secondary" id="lookup">Find Address from GPS</button></div><label for="fromLabel">From address for voucher (optional when GPS is used)</label><input id="fromLabel" placeholder="Readable street address"><label for="toLabel">To address for voucher (optional when GPS is used)</label><input id="toLabel" placeholder="Readable street address"><div class="row"><div><label for="purpose">Purpose</label><input id="purpose" required placeholder="MNER"></div><div><label for="miles">Driving miles</label><input id="miles" type="number" step=".1" min="0" required placeholder="Calculate below"></div></div>
+<div class="actions"><button type="button" id="calc">Calculate Road Mileage</button><button type="button" class="secondary" id="return">Return to Office</button><button type="button" class="secondary" id="swap">Swap</button></div>
+<div id="routeStatus" class="status small">Enter From and To, then tap <strong>Calculate Road Mileage</strong>. Previously calculated routes are reused automatically.</div>
+<button type="submit">Save Trip</button>
+</form>
+<div class="card"><div class="row"><div><div class="small">MONTH</div><input id="month" type="month"></div><div><div class="small">REIMBURSEMENT RATE / MILE</div><input id="rate" type="number" min="0" step=".001" placeholder="Optional"></div></div><div style="margin-top:14px" class="small">MONTH TOTAL</div><div id="total" class="total">0.0 miles</div><div id="amount" class="money"></div><div class="actions"><button id="report" type="button">Printable Monthly Report</button><button id="csv" class="secondary" type="button">Export CSV</button><button id="voucher" class="secondary" type="button">Download Official Excel Voucher</button><button id="clear" class="danger" type="button">Clear This Month</button></div></div>
+<div class="card"><h2>Trips</h2><div id="list" class="small">No trips saved.</div></div>
+<div class="card small notice"><strong>Privacy:</strong> client initials and purpose remain in this browser and are not included in route requests. When you tap Calculate, only the From/To addresses are sent to the address/routing services. Do not use this free lookup if your employer considers the destination address itself confidential. Address results are cached on this device to reduce repeat lookups.<br><br>Geocoding © OpenStreetMap contributors. Routing uses the public OSRM demonstration service. Free public services can be unavailable or change their policies; always review the displayed route mileage before saving.</div>
+<div class="card small"><strong>Voice on iPhone:</strong> tap a field and use the keyboard microphone. You can dictate addresses, purpose, and initials. After the app is hosted, open it in Safari → Share → Add to Home Screen.</div>
+</main>
+<script>
+const OFFICE='4329 Hughes Branch Rd, Huntington, WV 25701'; const $=x=>document.getElementById(x);
+let trips=JSON.parse(localStorage.getItem('amandaMileageTrips')||'[]');
+let geoCache=JSON.parse(localStorage.getItem('amandaGeoCache')||'{}');
+let routeCache=JSON.parse(localStorage.getItem('amandaRouteCache')||'{}');
+let lastGeoRequest=0;
+const now=new Date(); const today=[now.getFullYear(),String(now.getMonth()+1).padStart(2,'0'),String(now.getDate()).padStart(2,'0')].join('-');
+$('date').value=today; $('month').value=today.slice(0,7); $('rate').value=localStorage.getItem('amandaMileageRate')||'';
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function normalizeAddress(s){s=String(s||'').trim();return /^office$/i.test(s)?OFFICE:s}
+function key(s){return normalizeAddress(s).toLowerCase().replace(/\s+/g,' ')}
+function gps(s){const m=String(s||'').trim().match(/^\(?\s*(-?\d{1,2}\.\d+)\s*[,;]\s*(-?\d{1,3}\.\d+)\s*\)?$/);if(!m)return null;const lat=Number(m[1]),lon=Number(m[2]);return Math.abs(lat)<=90&&Math.abs(lon)<=180?{lat,lon,display_name:s.trim()}:null}
+function voucherAddress(raw,label){return gps(raw)?((label||'').trim()||raw.trim()):raw.trim()}
+function updateGpsUI(){const found=gps($('from').value)||gps($('to').value);$('coordHelp').classList.toggle('hidden',!found);$('lookup').classList.toggle('hidden',!found)}
+function routeKey(a,b){return key(a)+'|||'+key(b)}
+function persist(){localStorage.setItem('amandaMileageTrips',JSON.stringify(trips));localStorage.setItem('amandaGeoCache',JSON.stringify(geoCache));localStorage.setItem('amandaRouteCache',JSON.stringify(routeCache));}
+function selectedTrips(){return trips.filter(t=>t.date.slice(0,7)===$('month').value)}
+function render(){const shown=selectedTrips(),total=shown.reduce((s,t)=>s+Number(t.miles),0);$('total').textContent=total.toFixed(1)+' miles';const rate=Number($('rate').value);$('amount').textContent=rate>0?'Estimated reimbursement (per trip): $'+(shown.reduce((sum,t)=>sum+Math.round((Number(t.miles)*rate+Number.EPSILON)*100),0)/100).toFixed(2):'';$('list').innerHTML=shown.length?shown.map((t,i)=>{const realIndex=trips.indexOf(t);return `<div class="trip"><strong>${esc(t.date)}</strong> — ${esc(t.from)} → ${esc(t.to)}<br>${esc(t.purpose)} · ${esc(t.client||'')} · <strong>${Number(t.miles).toFixed(1)} mi</strong> ${t.auto?'<span class="pill">road route</span>':''}<br><button class="secondary" data-edit="${realIndex}" type="button">Edit Addresses</button><button class="secondary" data-del="${realIndex}" type="button">Delete</button></div>`}).join(''):'No trips saved for this month.'}
+async function waitRateLimit(){const elapsed=Date.now()-lastGeoRequest;if(elapsed<1100)await new Promise(r=>setTimeout(r,1100-elapsed));lastGeoRequest=Date.now()}
+async function geocode(address) {
+      const direct=gps(address);if(direct)return direct;
+      // Verified Apple Maps location for 4139 Palestine Rd, Ashton, WV 25503.
+      // This bypasses the public geocoder, which does not resolve this rural address.
+      const verifiedKey = String(address || "").trim().toLowerCase();
+      if (
+        verifiedKey.includes("4139 palestine rd") ||
+        verifiedKey.includes("4139 palestine road") ||
+        verifiedKey.includes("4139 palestine ridge")
+      ) {
+        return {
+          lat: 38.57774,
+          lon: -82.11255,
+          display_name: "4139 Palestine Rd, Ashton, WV 25503"
+        };
+      }
+
+      const raw = String(address || "").trim();
+      const key = raw.toLowerCase();
+
+      // Permanent office coordinates: never geocode the office.
+      if (key === "office" || key.includes("4329 hughes branch") || key.includes("choice care")) {
+        return {
+          lat: 38.369777,
+          lon: -82.348310,
+          display_name: "4329 Hughes Branch Rd, Huntington, WV 25701"
+        };
+      }
+
+      // Reuse successful address lookups on this device.
+      const cacheKey = "amanda_geo_" + key;
+      try {
+        const cached = JSON.parse(localStorage.getItem(cacheKey) || "null");
+        if (cached && cached.lat && cached.lon) return cached;
+      } catch (_) {}
+
+      // Rural-address fallback variants. Nominatim can recognize one form but not another.
+      const clean = raw.replace(/,/g, " ").replace(/\s+/g, " ").trim();
+      const variants = [
+        raw,
+        clean,
+        clean + (/\bWV\b/i.test(clean) ? "" : " WV"),
+        clean.replace(/\bRoad\b/ig, "Rd"),
+        clean.replace(/\bRd\b/ig, "Road")
+      ];
+
+      // If user omitted punctuation/state formatting, create a WV-biased structured-like query.
+      if (!/\bWest Virginia\b/i.test(clean)) variants.push(clean.replace(/\bWV\b/i, "West Virginia"));
+
+      const unique = [...new Set(variants.filter(Boolean))];
+
+      for (let i = 0; i < unique.length; i++) {
+        if (i) await new Promise(r => setTimeout(r, 1100)); // respect public geocoder pacing
+        const q = encodeURIComponent(unique[i]);
+        const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=us&addressdetails=1&q=${q}`;
+        const res = await fetch(url, { headers: { "Accept": "application/json" } });
+        if (!res.ok) continue;
+        const data = await res.json();
+        if (Array.isArray(data) && data.length) {
+          const hit = {
+            lat: Number(data[0].lat),
+            lon: Number(data[0].lon),
+            display_name: data[0].display_name || unique[i]
+          };
+          try { localStorage.setItem(cacheKey, JSON.stringify(hit)); } catch (_) {}
+          return hit;
+        }
+      }
+
+      throw new Error(`Could not find: ${raw} (tried ${unique.length} address formats)`);
+    }
+async function reverseGPS(raw){const g=gps(raw);if(!g)return null;await waitRateLimit();const u='https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&lat='+encodeURIComponent(g.lat)+'&lon='+encodeURIComponent(g.lon);const r=await fetch(u,{headers:{Accept:'application/json'}});if(!r.ok)throw new Error('Address lookup unavailable');const d=await r.json();return d&&d.display_name&&!d.error?d.display_name:null}
+$('from').addEventListener('input',updateGpsUI);$('to').addEventListener('input',updateGpsUI);
+$('lookup').onclick=async()=>{const b=$('lookup');b.disabled=true;b.textContent='Finding address…';try{let count=0;for(const side of ['from','to']){const raw=$(side).value;if(gps(raw)){const found=await reverseGPS(raw);if(found){const answer=prompt('Suggested '+side.toUpperCase()+' address. Edit or confirm it for the voucher:',found);if(answer!==null&&answer.trim()){$(side+'Label').value=answer.trim();count++}}else alert('No street address found for '+side+'. Please type it in the voucher address field.')}}if(count)$('routeStatus').textContent='Readable address saved in the form. Calculate and Save Trip to keep it.'}catch(err){alert('Address lookup failed: '+err.message+'. You can enter the address manually.')}finally{b.disabled=false;b.textContent='Find Address from GPS'}};
+function clearVoucherLabels(){$('fromLabel').value='';$('toLabel').value='';updateGpsUI()}
+async function calculate(){const from=$('from').value.trim(),to=$('to').value.trim();if(!from||!to){$('routeStatus').textContent='Enter both From and To first.';return}const rk=routeKey(from,to);if(routeCache[rk]){$('miles').value=routeCache[rk].miles.toFixed(1);$('routeStatus').textContent='Using saved road mileage: '+routeCache[rk].miles.toFixed(1)+' miles. Review before saving.';return}try{$('calc').disabled=true;$('routeStatus').textContent='Looking up addresses…';const a=await geocode(from),b=await geocode(to);$('routeStatus').textContent='Calculating driving route…';const u=`https://router.project-osrm.org/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}?overview=false&steps=false`;const r=await fetch(u);if(!r.ok)throw new Error('Routing failed ('+r.status+').');const d=await r.json();if(d.code!=='Ok'||!d.routes||!d.routes.length)throw new Error('No driving route found.');const miles=d.routes[0].distance/1609.344;routeCache[rk]={miles,from:a.display,to:b.display,updated:new Date().toISOString()};persist();$('miles').value=miles.toFixed(1);$('routeStatus').textContent='Road route: '+miles.toFixed(1)+' miles. Please review before saving.'}catch(err){$('routeStatus').textContent='Could not calculate automatically: '+err.message+' You can still enter mileage manually.'}finally{$('calc').disabled=false}}
+$('calc').onclick=calculate;
+$('swap').onclick=()=>{const a=$('from').value;$('from').value=$('to').value;$('to').value=a;$('miles').value='';clearVoucherLabels();$('routeStatus').textContent='Locations swapped. Tap Calculate Road Mileage.'};
+$('return').onclick=()=>{const current=$('to').value.trim()||$('from').value.trim();$('from').value=current||'Office';$('to').value='Office';$('purpose').value=$('purpose').value||'Return';$('miles').value='';clearVoucherLabels();$('routeStatus').textContent='Return trip prepared. Tap Calculate Road Mileage.'};
+$('f').addEventListener('submit',e=>{e.preventDefault();const m=Number($('miles').value);if(!Number.isFinite(m)||m<0)return;const rk=routeKey($('from').value,$('to').value);let t={date:$('date').value,from:voucherAddress($('from').value,$('fromLabel').value),to:voucherAddress($('to').value,$('toLabel').value),fromGPS:$('from').value.trim(),toGPS:$('to').value.trim(),purpose:$('purpose').value.trim(),client:$('client').value.trim().toUpperCase(),miles:m,auto:!!routeCache[rk]};trips.push(t);persist();$('from').value=t.toGPS||t.to;$('to').value='';clearVoucherLabels();$('purpose').value='';$('client').value='';$('miles').value='';$('routeStatus').textContent='Trip saved. Next trip starts from '+t.to+'.';render()});
+$('list').onclick=e=>{const edit=e.target.closest('[data-edit]');if(edit){const i=Number(edit.dataset.edit),t=trips[i];if(!t)return;const a=prompt('Edit FROM address on the voucher (mileage stays unchanged):',t.from);if(a===null)return;const b=prompt('Edit TO address on the voucher (mileage stays unchanged):',t.to);if(b===null)return;if(!a.trim()||!b.trim()){alert('Both addresses are required. No changes made.');return}t.from=a.trim();t.to=b.trim();persist();render();return}const b=e.target.closest('[data-del]');if(b&&confirm('Delete this trip?')){trips.splice(Number(b.dataset.del),1);persist();render()}};
+$('month').onchange=render;$('rate').oninput=()=>{localStorage.setItem('amandaMileageRate',$('rate').value);render()};
+$('report').onclick=()=>{const shown=selectedTrips();const total=shown.reduce((s,t)=>s+Number(t.miles),0);const rate=Number($('rate').value)||0;const month=$('month').value;const title=new Date(month+'-01T12:00:00').toLocaleDateString(undefined,{month:'long',year:'numeric'});const rows=shown.map(t=>`<tr><td>${esc(t.date)}</td><td>${esc(t.from)}</td><td>${esc(t.to)}</td><td>${esc(t.purpose)}</td><td>${esc(t.client||'')}</td><td class="num">${Number(t.miles).toFixed(1)}</td></tr>`).join('');const w=window.open('','_blank');if(!w){alert('Please allow pop-ups to create the printable report.');return;}w.document.write(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Amanda Mileage ${esc(title)}</title><style>body{font-family:Arial,sans-serif;margin:28px;color:#111}h1{font-size:22px;margin:0 0 4px}.sub{margin:0 0 18px;color:#444}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}.box{border:1px solid #777;padding:8px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #777;padding:7px;text-align:left;vertical-align:top}th{background:#eee}.num{text-align:right}.totals{margin:16px 0 0 auto;width:280px}.totals div{display:flex;justify-content:space-between;border-bottom:1px solid #aaa;padding:6px}.sign{margin-top:38px;display:grid;grid-template-columns:1fr 160px;gap:28px}.line{border-top:1px solid #111;padding-top:5px;font-size:12px}@media print{button{display:none}body{margin:.35in}}</style></head><body><h1>Monthly Mileage Expense Report</h1><p class="sub">${esc(title)}</p><div class="meta"><div class="box"><strong>Employee:</strong> Amanda</div><div class="box"><strong>Office:</strong> 4329 Hughes Branch Rd, Huntington, WV 25701</div></div><table><thead><tr><th>Date</th><th>From</th><th>To</th><th>Purpose</th><th>Client Initials</th><th>Miles</th></tr></thead><tbody>${rows||'<tr><td colspan="6">No trips recorded for this month.</td></tr>'}</tbody></table><div class="totals"><div><strong>Total Miles</strong><strong>${total.toFixed(1)}</strong></div>${rate>0?`<div><span>Rate / Mile</span><span>$${rate.toFixed(3)}</span></div><div><strong>Reimbursement</strong><strong>$${(shown.reduce((sum,t)=>sum+Math.round((Number(t.miles)*rate+Number.EPSILON)*100),0)/100).toFixed(2)}</strong></div>`:''}</div><div class="sign"><div class="line">Employee Signature</div><div class="line">Date</div></div><p style="font-size:10px;color:#666;margin-top:24px">Generated by Amanda Mileage. Review all entries and route mileage before submission.</p><button onclick="window.print()">Print / Save as PDF</button><div style="text-align:center;font-size:11px;color:#888;margin:12px">Build 6.5 — per-trip reimbursement</div>
+</body></html>`);w.document.close();};
+$('clear').onclick=()=>{const m=$('month').value;if(confirm('Clear all trips for '+m+'?')){trips=trips.filter(t=>t.date.slice(0,7)!==m);persist();render()}};
+$('csv').onclick=()=>{const shown=selectedTrips();const q=v=>'"'+String(v??'').replaceAll('"','""')+'"';let lines=[['Date','From','To','Purpose','Client Initials','Miles'].map(q).join(','),...shown.map(t=>[t.date,t.from,t.to,t.purpose,t.client,Number(t.miles).toFixed(1)].map(q).join(','))];const total=shown.reduce((s,t)=>s+Number(t.miles),0);lines.push(['','','','','Total Miles',total.toFixed(1)].map(q).join(','));const rate=Number($('rate').value);if(rate>0)lines.push(['','','','','Reimbursement',(shown.reduce((sum,t)=>sum+Math.round((Number(t.miles)*rate+Number.EPSILON)*100),0)/100).toFixed(2)].map(q).join(','));let blob=new Blob([lines.join('\n')],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='Amanda_Mileage_'+$('month').value+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};
+
+// Official employer voucher: uses the approved, embedded Excel workbook as the template.
+// This export only READS existing trips; it never alters localStorage or trip records.
+const voucherTemplateBase64='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';
+function voucherTemplateBuffer(){const binary=atob(voucherTemplateBase64);const bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);return bytes.buffer}
+
+// Edit the actual XLSX ZIP/XML rather than importing its fonts into XlsxPopulate.
+// This preserves the employer's existing fonts, borders, merges and page layout.
+function loadVoucherLibrary(){return new Promise((resolve,reject)=>{if(window.JSZip)return resolve(window.JSZip);const sc=document.createElement('script');sc.src='https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';sc.onload=()=>window.JSZip?resolve(window.JSZip):reject(new Error('ZIP library unavailable'));sc.onerror=()=>reject(new Error('Could not load Excel exporter. Check internet connection.'));document.head.appendChild(sc)})}
+const XMLNS='http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+function parseXML(s){const d=new DOMParser().parseFromString(s,'text/xml');const error=d.getElementsByTagName('parsererror')[0];if(error)throw new Error('Template XML: '+error.textContent.slice(0,180));return d}
+function xmlString(d){return new XMLSerializer().serializeToString(d)}
+function findCell(doc,addr){
+ const rows=doc.getElementsByTagNameNS(XMLNS,'row');
+ const rowNum=Number(addr.match(/\d+/)[0]);
+ let row=Array.from(rows).find(x=>Number(x.getAttribute('r'))===rowNum);
+ if(!row)throw new Error('Missing template row '+rowNum);
+ let c=Array.from(row.getElementsByTagNameNS(XMLNS,'c')).find(x=>x.getAttribute('r')===addr);
+ if(!c){c=doc.createElementNS(XMLNS,'c');c.setAttribute('r',addr);row.appendChild(c)}
+ return c;
+}
+function putCell(doc,addr,value,formula){
+ const c=findCell(doc,addr);
+ Array.from(c.childNodes).forEach(n=>{if(n.nodeType===1&&['v','f','is'].includes(n.localName))c.removeChild(n)});
+ c.removeAttribute('t');
+ if(formula){const f=doc.createElementNS(XMLNS,'f');f.textContent=formula;c.appendChild(f);return}
+ if(value===null||value===undefined||value==='')return;
+ if(typeof value==='number'){const v=doc.createElementNS(XMLNS,'v');v.textContent=String(value);c.appendChild(v)}
+ else{c.setAttribute('t','inlineStr');const is=doc.createElementNS(XMLNS,'is');const t=doc.createElementNS(XMLNS,'t');t.textContent=String(value);is.appendChild(t);c.appendChild(is)}
+}
+// Add a dedicated Shrink-to-Fit style for each existing address-cell style.
+// Never change the original style, because other voucher cells may share it.
+function addAddressShrinkStyles(stylesDoc, sheetDoc){
+ const xfs=stylesDoc.getElementsByTagNameNS(XMLNS,'cellXfs')[0];
+ if(!xfs)throw new Error('Excel styles are missing');
+ const originals=Array.from(xfs.getElementsByTagNameNS(XMLNS,'xf'));
+ const cache={};
+ for(let i=0;i<9;i++)for(const addr of ['D'+(8+i*2),'D'+(9+i*2)]){
+  const c=findCell(sheetDoc,addr);
+  const old=Number(c.getAttribute('s')||0);
+  if(cache[old]===undefined){
+   const source=originals[old];if(!source)throw new Error('Missing address style '+old);
+   const xf=source.cloneNode(true);
+   let align=Array.from(xf.childNodes).find(n=>n.nodeType===1&&n.localName==='alignment');
+   if(!align){align=stylesDoc.createElementNS(XMLNS,'alignment');xf.appendChild(align)}
+   align.setAttribute('shrinkToFit','1');
+   align.setAttribute('wrapText','0');
+   xf.setAttribute('applyAlignment','1');
+   cache[old]=originals.length+Object.keys(cache).length;
+   xfs.appendChild(xf);
+  }
+  c.setAttribute('s',String(cache[old]));
+ }
+ xfs.setAttribute('count',String(originals.length+Object.keys(cache).length));
+ return cache;
+}
+function fillVoucherSheet(doc,batch,rate,page,count){
+ putCell(doc,'M1',rate);
+ for(let i=0;i<9;i++){
+  const r=8+i*2,t=batch[i];
+  putCell(doc,'A'+r,t?t.date:'');
+  putCell(doc,'B'+r,t?'Mileage':'');
+  putCell(doc,'D'+r,t?t.to:'');
+  putCell(doc,'D'+(r+1),t?t.from:'');
+  putCell(doc,'F'+r,t?t.purpose:'');
+  putCell(doc,'G'+r,t?t.client:'');
+  putCell(doc,'H'+r,t?Number(t.miles):null);
+  if(t)putCell(doc,'I'+r,null,'IF(H'+r+'="","",ROUND(H'+r+'*$M$1,2))');else putCell(doc,'I'+r,'');
+ }
+ putCell(doc,'I27',null,'SUM(I8,I10,I12,I14,I16,I18,I20,I22,I24)');
+ putCell(doc,'I29',null,page===0?'SUM('+Array.from({length:count},(_,i)=>"'Page "+(i+1)+"'!I27").join(',')+')':'I27');
+ // Remove any stray example entries beyond the printed voucher.
+ for(const row of Array.from(doc.getElementsByTagNameNS(XMLNS,'row'))){
+  if(Number(row.getAttribute('r'))>=32&&Number(row.getAttribute('r'))<=33){
+   for(const c of Array.from(row.getElementsByTagNameNS(XMLNS,'c'))){
+    for(const n of Array.from(c.childNodes)){if(n.nodeType===1&&['v','f','is'].includes(n.localName))c.removeChild(n)}
+   }
+  }
+ }
+}
+$('voucher').onclick=async()=>{
+ const button=$('voucher'),original=button.textContent;
+ try{
+  const shown=selectedTrips().slice().sort((a,b)=>a.date.localeCompare(b.date));
+  if(!shown.length){alert('No trips saved for this month.');return}
+  const rate=Number($('rate').value);
+  if(!Number.isFinite(rate)||rate<=0){alert('Enter the approved reimbursement rate first.');return}
+  button.disabled=true;button.textContent='Preparing Excel…';
+  const JSZip=await loadVoucherLibrary();
+  const zip=await JSZip.loadAsync(voucherTemplateBuffer());
+  const source=await zip.file('xl/worksheets/sheet1.xml').async('string');
+  const stylesDoc=parseXML(await zip.file('xl/styles.xml').async('string'));
+  let shrinkStyles=null;
+  const count=Math.ceil(shown.length/9);
+  for(let p=0;p<count;p++){
+   const doc=parseXML(source);
+   fillVoucherSheet(doc,shown.slice(p*9,(p+1)*9),rate,p,count);
+   addAddressShrinkStyles(stylesDoc,doc);
+   zip.file('xl/worksheets/sheet'+(p===0?1:p+2)+'.xml',xmlString(doc));
+  }
+  const wb=parseXML(await zip.file('xl/workbook.xml').async('string'));
+  const sheets=wb.getElementsByTagNameNS(XMLNS,'sheets')[0];
+  const first=sheets.getElementsByTagNameNS(XMLNS,'sheet')[0];first.setAttribute('name','Page 1');
+  const rel=parseXML(await zip.file('xl/_rels/workbook.xml.rels').async('string'));
+  const types=parseXML(await zip.file('[Content_Types].xml').async('string'));
+  const relNS='http://schemas.openxmlformats.org/package/2006/relationships';
+  const typeNS='http://schemas.openxmlformats.org/package/2006/content-types';
+  for(let p=1;p<count;p++){
+   const num=p+2, rid='rId'+(100+p);
+   const sn=first.cloneNode(true);sn.setAttribute('name','Page '+(p+1));sn.setAttribute('sheetId',String(num));sn.setAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','r:id',rid);sheets.appendChild(sn);
+   const rr=rel.createElementNS(relNS,'Relationship');rr.setAttribute('Type','http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet');rr.setAttribute('Target','/xl/worksheets/sheet'+num+'.xml');rr.setAttribute('Id',rid);rel.documentElement.appendChild(rr);
+   const tt=types.createElementNS(typeNS,'Override');tt.setAttribute('PartName','/xl/worksheets/sheet'+num+'.xml');tt.setAttribute('ContentType','application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml');types.documentElement.appendChild(tt);
+  }
+  zip.file('xl/styles.xml',xmlString(stylesDoc));
+  zip.file('xl/workbook.xml',xmlString(wb));zip.file('xl/_rels/workbook.xml.rels',xmlString(rel));zip.file('[Content_Types].xml',xmlString(types));
+  const blob=await zip.generateAsync({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const url=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=url;a.download='Amanda_Official_Expense_Voucher_'+$('month').value+'.xlsx';
+  document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
+ }catch(err){alert('Excel export failed: '+err.message+'. Your saved trips have not been changed.')}
+ finally{button.disabled=false;button.textContent=original}
+};
+
+render();
+</script><div style="text-align:center;font-size:11px;color:#888;margin:12px">Build 6.5 — per-trip reimbursement</div>
+</body></html>
